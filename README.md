@@ -310,3 +310,162 @@ Linux <form:checkbox path="operatingSystems" value="Linux" />
 Mac OS <form:checkbox path="operatingSystems" value="Mac OS" />
 MS Windows <form:checkbox path="operatingSystems" value="MS Windows" />
 ```
+
+## Spring MVC表單驗證
+>引用https://www.jianshu.com/p/0bfe2318814f
+>
+>Hibernate Validator是Bean Validation 的參考實現. HibernateValidator提供了JSR303規範中所有內置constraint的實現，除此之外還有一些附加的constraint。
+>
+>Bean Validation為JavaBean驗證定義了相應的元數據模型和API。缺省的元數據是Java Annotations，通過使用XML可以對原有的元數據信息進行覆蓋和擴展。BeanValidation是一個運行時的數據驗證框架，在驗證之後驗證的錯誤信息會被馬上返回。
+>
+>**Hibernate Validator 的作用**
+>* 驗證邏輯與業務邏輯之間進行了分離，降低了程序耦合度
+>* 統一且規範的驗證方式，無需你再次編寫重複的驗證代碼
+>* 你將更專注於你的業務，將這些繁瑣的事情統統丟在一邊
+>
+```
+public class Customer {
+
+	private String firstName;
+	
+	@NotNull(message="is required")
+	@Size(min=1, message="is required")
+	private String lastName;
+	
+	@Pattern(regexp="^[a-zA-Z0-9]{5}", message="only 5 chars/digits")
+	private String postalCode;
+	
+	@CourseCode(value="TOPS", message="must start with TOPS")
+	private String courseCode;
+	
+	@NotNull(message="is required")
+	@Min(value=0, message="must be greater than or equal to zero")
+	@Max(value=10, message="must be less than or equal to 10")
+	private Integer freePasses;		
+	
+	// Getter...
+	// Setter...
+}
+```
+>`@Valid`的參數後必須緊跟著一個BindingResult參數，否則spring會在校驗不通過時直接拋出異常
+>
+>在執行 Spring MVC 驗證時，`BindingResult`參數的位置非常重要。在方法簽名中，BindingResult參數必須緊跟在模型屬性之後。如果將它放在任何其他位置，SpringMVC驗證將無法按預期工作。事實上，您的驗證規則將被忽略
+>
+>`@InitBinder`從字面意思可以看出這個的作用是給Binder做初始化的，@InitBinder主要用在@Controller中標註於方法上（@RestController也算），表示初始化當前控制器的數據綁定器（或者屬性綁定器），只對當前的Controller有效。@InitBinder標註的方法必須有一個參數`WebDataBinder`。所謂的屬性編輯器可以理解就是幫助我們完成參數绑定，然後是在請求到達controller要執行方法前執行！
+>
+>WebDataBinder的作用是從Web 請求中，把請求裡的參數都綁定到對應的JavaBean上！在Controller方法中的參數類型可以是基本類型，也可以是封裝後的普通Java類型。若這個普通的Java類型沒有聲明任何註解，則意味著它的每一個屬性都需要到Request中去查找對應的請求參數，而WebDataBinder則可以帮助我們實現從Request中取出請求參數並綁定到JavaBean中。
+```
+@Controller
+@RequestMapping("/customer")
+public class CustomerController {
+
+	// add an initbinder ... to convert trim input strings
+	// remove leading and trailing whitespace
+	// resolve issue for our validation
+	@InitBinder
+	public void initBinder(WebDataBinder dataBinder)
+	{
+		StringTrimmerEditor stringTrimmerEditor = new StringTrimmerEditor(true);
+		
+		dataBinder.registerCustomEditor(String.class, stringTrimmerEditor);
+	}
+	
+	@RequestMapping("/showForm")
+	public String showForm(Model theModel)
+	{
+		theModel.addAttribute("customer", new Customer());
+		
+		return "customer-form";
+	}
+	
+	// @Valid Perform validation rules on Customer object 
+	// BindingResult Results of validation placed in the BindingResult 
+	@RequestMapping("/processForm")
+	public String processForm(
+			@Valid @ModelAttribute("customer") Customer theCustomer,
+			BindingResult theBindingResult)
+	{
+		// 檢查BindingResult是否有錯誤
+		// 有錯誤 => 返回客戶表單
+		if(theBindingResult.hasErrors()) 
+			{
+				return "customer-form";
+			}
+		// 無錯誤 => 返回客戶確認結果(成功頁面)
+		else 
+			{
+				return "customer-confirmation"; 			
+			}
+	}
+}
+```
+**在messages.properties中加入自定義錯誤訊息**
+```
+// 錯誤型態.類別.屬性名稱 = 自定義錯誤訊息
+typeMismatch.customer.freePasses=Invalid number
+```
+**在spring-mvc-demo-servlet.xml中添加自定義來源路徑**
+```
+<!-- Load custom message resources -->
+<bean id="messageSource"
+	class="org.springframework.context.support.ResourceBundleMessageSource">
+	<property name="basenames" value="resources/messages" />
+</bean>
+```
+>**自定義註解**
+>
+>參考https://blog.csdn.net/qq_36747237/article/details/102577720
+>
+>`@Constraint`：給出具有業務規則的實際類，用於驗證此過程
+>
+>`@Target`：給出此註解可運用於何處
+>
+>`@Retention`：表示註解保留時間長短
+```
+@Constraint(validatedBy = CourseCodeConstraintValidator.class)
+@Target( { ElementType.METHOD, ElementType.FIELD } )
+@Retention(RetentionPolicy.RUNTIME)
+public @interface CourseCode {
+
+	// define default course code
+	public String value() default "LUV";
+	
+	// define default error message
+	public String message() default "must start with LUV";
+	
+	// define default groups
+	public Class<?>[] groups() default {};
+	
+	// define default payloads
+	public Class<? extends Payload>[] payload() default {};
+}
+```
+**實現CourseCodeConstraintValidator驗證方法**
+```
+public class CourseCodeConstraintValidator implements ConstraintValidator<CourseCode, String>{
+
+	private String coursePrefix;
+	
+	@Override
+	public void initialize(CourseCode constraintAnnotation) {
+		coursePrefix = constraintAnnotation.value();
+	}
+
+	@Override
+	public boolean isValid(String theCode, ConstraintValidatorContext theConstraintValidatorContext) {
+
+		// Validation logic
+		// Test if the form data starts with our course prefix
+		// Does it start with "LUV"?
+		boolean result;
+		
+		if (theCode != null)
+		{						
+			result =theCode.startsWith(coursePrefix);
+		}
+		else result = true;
+		
+		return result;
+	}
+}
+```
